@@ -40,14 +40,14 @@ training:
   dtype: bfloat16
   gc_freq: 1
   datasets:
-    - path: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/alpaca-cleaned"
+    - path: "/leonardo_scratch/fast/iGen_train/datasets/alpaca-cleaned"
       split: "train[:95%]"
 
 eval:
   eval_every_n_steps: 1000
   max_eval_steps: null
   datasets:
-    - path: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/alpaca-cleaned"
+    - path: "/leonardo_scratch/fast/iGen_train/datasets/alpaca-cleaned"
       split: "train[95%:]"
 
 parallelism:
@@ -65,6 +65,7 @@ checkpoint:
   initial_load_path: hf://${model_name}
   initial_load_in_hf: true
   last_save_in_hf: true
+  last_save_model_only: false
   interval: 50
   async_mode: "disabled"
 
