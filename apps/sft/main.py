@@ -2,14 +2,11 @@ import asyncio
 import logging
 import sys
 
-import torch
-import torchtitan.experiments.forge.train_spec as forge_train_spec
-from forge.controller import ForgeActor
+from apps.sft.recipe import ForgeSFTRecipe
 from forge.controller.provisioner import init_provisioner, shutdown
 from forge.observability import get_or_create_metric_logger
 from forge.types import ProvisionerConfig, LauncherConfig, ServiceConfig, ProcessConfig
 from forge.util.config import parse
-from monarch.actor import current_rank, current_size, endpoint
 from omegaconf import DictConfig, OmegaConf
 
 logging.basicConfig(level=logging.INFO)
