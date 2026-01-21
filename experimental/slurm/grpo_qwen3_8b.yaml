@@ -1,63 +1,58 @@
 # Grouped Relative Policy Optimization (GRPO)
-# NOTE - This has not been tested for correctness yet! All testing so far has been only for infrastructure stability
-# ./experimental/slurm/submit.sh qwen3_30b_a3b
+# ./apps/grpo/slurm/submit.sh qwen3_8b
 
 # Global configuration
-group_size: 4
-local_batch_size: 1 # per-device batch size
+group_size: 16
+local_batch_size: 1
 max_req_tokens: 1024
-max_res_tokens: 1024
-model: "Qwen/Qwen3-30B-A3B"
-off_by_n: 1 # Off by one by default
+max_res_tokens: 2048
+model: "Qwen/Qwen3-8B"
+off_by_n: 1
+compile: true
 
 provisioner:
   launcher: slurm
+  job_name: grpo_qwen3_8b
   slurm_args:
-    account: agentic-models
-    qos: h200_capabilities_shared
-  mem: 2047962M
-  cpus_per_task: 192
-  job_name: qwen3_30b_a3b
+    account: AIFAC_L07_016
+    qos: qos_llm_min
+    partition: boost_usr_prod
+  mem: 0
+  cpus_per_task: 32
+  gpus_per_node: 4
 
-# Main loop configuration
-rollout_threads: 32 # make this 4x the number of policy replicas seems to work well
-
-# Observability configuration
 metric_logging:
   wandb:
     entity: torchforge
     project: grpo-training
     group: grpo_exp_${oc.env:USER}
-    logging_mode: global_reduce # global_reduce, per_rank_reduce, per_rank_no_reduce
+    logging_mode: global_reduce
   console:
     logging_mode: global_reduce
 
-# Dataset configuration
 dataset:
-  path: "openai/gsm8k"
+  path: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/gsm8k"
   revision: "main"
   data_split: "train"
   streaming: true
   model: ${model}
 
-# Generator configuration
 generator:
-  engine_args:  # https://docs.vllm.ai/en/v0.10.0/api/vllm/engine/arg_utils.html#vllm.engine.arg_utils.EngineArgs
+  engine_args:
     model: ${model}
     tensor_parallel_size: 4
     pipeline_parallel_size: 1
-    enforce_eager: false
-  sampling_params:  # https://docs.vllm.ai/en/v0.10.0/api/vllm/sampling_params.html#vllm.sampling_params.SamplingParams
+    enforce_eager: ${not:${compile}}
+  sampling_params:
     n: ${group_size}
     max_tokens: ${max_res_tokens}
     temperature: 1.0
     top_p: 1.0
 
-# Trainer configuration
 trainer:
   model:
     name: qwen3
-    flavor: 30B-A3B
+    flavor: 8B
     hf_assets_path: hf://${model}
   optimizer:
     name: AdamW
@@ -67,72 +62,67 @@ trainer:
     warmup_steps: 1
   training:
     local_batch_size: ${local_batch_size}
-    seq_len: ${sum:${max_req_tokens},${max_res_tokens}}  # seq_len >= max_req_tokens + max_res_tokens
+    seq_len: ${sum:${max_req_tokens},${max_res_tokens}}
     max_norm: 1.0
     steps: 1000000
     dtype: bfloat16
     gc_freq: 1
   compile:
-    enable: false
+    enable: ${compile}
   parallelism:
     data_parallel_replicate_degree: 1
-    data_parallel_shard_degree: -1
-    tensor_parallel_degree: 1
+    data_parallel_shard_degree: 1
+    tensor_parallel_degree: 4
     pipeline_parallel_degree: 1
     context_parallel_degree: 1
     expert_parallel_degree: 1
-    expert_tensor_parallel_degree: 1
     disable_loss_parallel: true
   checkpoint:
     enable: true
+    folder: ./checkpoint
     initial_load_path: hf://${model}
     initial_load_in_hf: true
-    folder: ./checkpoint
     last_save_in_hf: true
     interval: 500
     async_mode: "disabled"
   activation_checkpoint:
-    mode: full
+    mode: selective
+    selective_ac_option: op
   comm:
-    # 30B MoE model can require more time to load checkpoint than 1.7B's 1200s
     init_timeout_seconds: 1800
 
-# Replay buffer configuration
 replay_buffer:
   batch_size: ${local_batch_size}
   max_policy_age: ${off_by_n}
-  dp_size: ${actors.trainer.procs}
+  dp_size: 1
 
-# Reference model configuration
 ref_model:
   model:
     name: qwen3
-    flavor: 30B-A3B
+    flavor: 8B
     hf_assets_path: hf://${model}
   training:
     seq_len: ${trainer.training.seq_len}
     dtype: bfloat16
     gc_freq: 1
   compile:
-    enable: false
+    enable: ${compile}
   parallelism:
     data_parallel_replicate_degree: 1
-    data_parallel_shard_degree: -1
-    tensor_parallel_degree: 1
+    data_parallel_shard_degree: 1
+    tensor_parallel_degree: 4
     pipeline_parallel_degree: 1
     context_parallel_degree: 1
     expert_parallel_degree: 1
   checkpoint:
-    enable: true
     initial_load_path: hf://${model}
     initial_load_in_hf: true
   comm:
     init_timeout_seconds: 1800
 
-# All resource allocations
 services:
   generator:
-    procs: ${generator.engine_args.tensor_parallel_size}
+    procs: 4
     num_replicas: 1
     hosts: 1
     with_gpus: true
@@ -155,7 +145,7 @@ actors:
     with_gpus: false
     mesh_name: dataset
   trainer:
-    procs: 8
+    procs: 4
     hosts: 1
     with_gpus: true
     mesh_name: trainer
