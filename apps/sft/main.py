@@ -303,6 +303,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         
         loss = self.forward_backward(batch, labels)
 
+        # Todo: use this (?). Taken from upstream
         grad_norm = dist_utils.clip_grad_norm_(
             [p for m in self.model_parts for p in m.parameters()],
             self.job_config.training.max_norm,
@@ -549,13 +550,11 @@ async def run(cfg: DictConfig) -> None:
             for name, svc_cfg in cfg.services.items():
                 svc_container = OmegaConf.to_container(svc_cfg, resolve=True)
                 services_dict[name] = ServiceConfig(**svc_container)
-
         actors_dict = {}
         if cfg.get("actors"):
             for name, actor_cfg in cfg.actors.items():
                 actor_container = OmegaConf.to_container(actor_cfg, resolve=True)
                 actors_dict[name] = ProcessConfig(**actor_container)
-
         launcher_config = LauncherConfig(
             launcher=provisioner_dict.get("launcher"),
             job_name=provisioner_dict.get("job_name", ""),
