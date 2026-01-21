@@ -1,46 +1,18 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 import asyncio
-import contextlib
 import logging
-import math
-import os
 import sys
-import time
-from typing import Any
 
 import torch
 import torchtitan.experiments.forge.train_spec as forge_train_spec
 from forge.controller import ForgeActor
 from forge.controller.provisioner import init_provisioner, shutdown
-from forge.data.collate import collate_padded
-from forge.data.datasets.sft_dataset import AlpacaToMessages, sft_iterable_dataset
-from forge.data.tokenizer import HuggingFaceModelTokenizer
-from forge.data.utils import StopAfterOneEpoch
-from forge.observability import get_or_create_metric_logger, record_metric, Reduce
+from forge.observability import get_or_create_metric_logger
 from forge.types import ProvisionerConfig, LauncherConfig, ServiceConfig, ProcessConfig
 from forge.util.config import parse
 from monarch.actor import current_rank, current_size, endpoint
 from omegaconf import DictConfig, OmegaConf
-from torch import nn
-from torchdata.stateful_dataloader import StatefulDataLoader
-from torchtitan.components.loss import LossFunction
-from torchtitan.components.lr_scheduler import LRSchedulersContainer
-from torchtitan.components.optimizer import OptimizersContainer
-from torchtitan.distributed import ParallelDims, utils as dist_utils
-from torchtitan.experiments.forge.engine import ForgeEngine
-from torchtitan.experiments.forge.job_config import ForgeJobConfig
 
-Checkpointer = Any
-Dataloader = Any
-MetricLogger = Any
-Profiler = Any
-Tokenizer = Any
-
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -567,23 +539,23 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
 
 
 async def run(cfg: DictConfig) -> None:
-    logging.info("Spawning recipe...")
-    
+    logger.info("Spawning recipe...")
+
     if cfg.get("provisioner", None) is not None:
         provisioner_dict = OmegaConf.to_container(cfg.provisioner, resolve=True)
-        
+
         services_dict = {}
         if cfg.get("services"):
             for name, svc_cfg in cfg.services.items():
                 svc_container = OmegaConf.to_container(svc_cfg, resolve=True)
                 services_dict[name] = ServiceConfig(**svc_container)
-        
+
         actors_dict = {}
         if cfg.get("actors"):
             for name, actor_cfg in cfg.actors.items():
                 actor_container = OmegaConf.to_container(actor_cfg, resolve=True)
                 actors_dict[name] = ProcessConfig(**actor_container)
-        
+
         launcher_config = LauncherConfig(
             launcher=provisioner_dict.get("launcher"),
             job_name=provisioner_dict.get("job_name", ""),
@@ -594,12 +566,12 @@ async def run(cfg: DictConfig) -> None:
             mem=provisioner_dict.get("mem"),
             gpus_per_node=provisioner_dict.get("gpus_per_node", 8),
         )
-        
-        provisioner = await init_provisioner(
+
+        await init_provisioner(
             ProvisionerConfig(launcher_config=launcher_config)
         )
     else:
-        provisioner = await init_provisioner()
+        await init_provisioner()
 
     metric_logging_cfg = cfg.get("metric_logging", {})
     mlogger = await get_or_create_metric_logger(process_name="Controller")
@@ -608,25 +580,24 @@ async def run(cfg: DictConfig) -> None:
     actor_cfg = OmegaConf.to_container(cfg.actors.sft_trainer, resolve=True)
     recipe = await ForgeSFTRecipe.options(**actor_cfg).as_actor(cfg)
 
-    logging.info("Created recipe, running setup.")
+    logger.info("Created recipe, running setup.")
     await recipe.setup.call()
 
-    logging.info("Recipe has been setup. Training now.")
+    logger.info("Recipe has been setup. Training now.")
     await recipe.train.call()
 
-    logging.info("Done training. Clean up")
+    logger.info("Done training. Clean up")
     await recipe.cleanup.call()
 
     await recipe.mesh.stop()
-    
     await shutdown()
-    logging.info("All done!")
+    logger.info("All done!")
 
 
 @parse
-def recipe_main(cfg: DictConfig) -> None:
+def main(cfg: DictConfig) -> None:
     asyncio.run(run(cfg))
 
 
 if __name__ == "__main__":
-    sys.exit(recipe_main())
+    sys.exit(main())
