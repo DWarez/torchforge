@@ -1,5 +1,9 @@
 # <img width="35" height="35" alt="image" src="https://github.com/user-attachments/assets/2700a971-e5d6-4036-b03f-2f89c9791609" /> torchforge
 
+# WAIT
+To make this work on Cineca, you need to apply [this patch](https://github.com/DWarez/monarch/commit/bd04828ce37f4438c3620bfea427f82f557f57c5) to the Monarch package installed in your conda environment.
+
+
 #### A PyTorch-native agentic RL library that lets you focus on algorithms—not infra.
 [![GPU Tests](https://github.com/meta-pytorch/forge/actions/workflows/gpu_test.yaml/badge.svg?branch=main)](https://github.com/meta-pytorch/forge/actions/workflows/gpu_test.yaml?query=branch%3Amain)
 [![Documentation](https://img.shields.io/badge/Docs-meta--pytorch.org-blue?style=flat&logo=readthedocs&logoColor=white)](https://meta-pytorch.org/torchforge/)
