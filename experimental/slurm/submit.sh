@@ -5,7 +5,14 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-CONFIG_NAME="${1}"
+SCRIPT_TYPE="${1}"
+
+if [[ "${SCRIPT_TYPE}" != "sft" && "${SCRIPT_TYPE}" != "grpo" ]]; then
+    echo "Error: First parameter must be 'sft' or 'grpo'"
+    exit 1
+fi
+
+CONFIG_NAME="${2}"
 RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/$SLURM_JOB_NAME"
 
 export NUM_NODES=1
@@ -54,7 +61,7 @@ sbatch --verbose --job-name="${CONFIG_NAME}_controller" \
        --exclude="lrdn[1831-3456]" \
        --error="$RES_DIR/%x_%j.err" \
        --output="$RES_DIR/%x_%j.out" \
-       experimental/slurm/custom_submit_sft.sh
+       experimental/slurm/submit_${SCRIPT_TYPE}.sh
 
 
 # Usage:
