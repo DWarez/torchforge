@@ -64,7 +64,7 @@ checkpoint:
   folder: ./checkpoint
   initial_load_path: hf://${model_name}
   initial_load_in_hf: true
-  last_save_in_hf: true
+  last_save_in_hf: false
   last_save_model_only: false
   interval: 50
   async_mode: "disabled"
