@@ -9,7 +9,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --exclude="lrdn[1831-3456]"
 
-echo "Starting GRPO training job"
+echo "Starting SFT training job"
 
 eval "$(conda shell.bash hook)"
 
@@ -21,4 +21,4 @@ export TORCHSTORE_RDMA_ENABLED=0
 
 cd /leonardo_scratch/fast/iGen_train/$USER/forge
 
-srun python -m apps.grpo.main --config experimental/slurm/${CONFIG_NAME}.yaml
+srun python -m apps.sft.main --config experimental/slurm/${CONFIG_NAME}.yaml
