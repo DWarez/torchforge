@@ -1,3 +1,3 @@
-from apps.sft.recipe import ForgeSFTRecipe
+from apps.sft.trainer import TitanSFTTrainer
 
-__all__ = ["ForgeSFTRecipe"]
+__all__ = ["TitanSFTTrainer"]
