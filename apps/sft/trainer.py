@@ -5,22 +5,24 @@ import time
 from typing import Any, Iterable
 
 import torch
-from apps.sft.data import setup_dataloader
-from apps.sft.metrics import TrainingMetrics, log_training_metrics, log_eval_metrics
-from forge.controller import ForgeActor
-from forge.data.utils import StopAfterOneEpoch
-from forge.observability import get_or_create_metric_logger, record_metric, Reduce
 from monarch.actor import current_rank, current_size, endpoint
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.experiments.forge.engine import ForgeEngine
 from torchtitan.experiments.forge.job_config import ForgeJobConfig
 
+from apps.sft.data import setup_dataloader
+from apps.sft.metrics import TrainingMetrics, log_eval_metrics, log_training_metrics
+from forge.controller import ForgeActor
+from forge.data.utils import StopAfterOneEpoch
+from forge.observability import Reduce, get_or_create_metric_logger, record_metric
+
 logger = logging.getLogger(__name__)
 
 try:
     # this exists in torchtitan v0.2.1 but we're on v0.2.0
     from torchtitan.distributed.context_parallel import prepare_context_parallel_input
+
     HAS_CONTEXT_PARALLEL = True
 except ImportError:
     HAS_CONTEXT_PARALLEL = False
@@ -47,7 +49,7 @@ def get_optional_mesh(parallel_dims, name: str):
     return None
 
 
-class ForgeSFTRecipe(ForgeActor, ForgeEngine):
+class TitanSFTTrainer(ForgeActor, ForgeEngine):
     def __init__(self, config: DictConfig | ListConfig):
         job_config_dict = ForgeJobConfig().to_dict()
         job_config: DictConfig | ListConfig = OmegaConf.merge(job_config_dict, config)
@@ -98,8 +100,12 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         eval_config = self.job_config.get("eval", {})
         self.eval_every_n_steps = eval_config.get("eval_every_n_steps")
         max_eval_steps = eval_config.get("max_eval_steps")
-        self.max_eval_steps = max_eval_steps if max_eval_steps and max_eval_steps > 0 else None
-        self.validation_enabled = self.eval_every_n_steps is not None and self.eval_every_n_steps > 0
+        self.max_eval_steps = (
+            max_eval_steps if max_eval_steps and max_eval_steps > 0 else None
+        )
+        self.validation_enabled = (
+            self.eval_every_n_steps is not None and self.eval_every_n_steps > 0
+        )
 
         if self.validation_enabled:
             print(f"[Rank {self._rank}] Setting eval datasets...", flush=True)
@@ -117,12 +123,17 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         print(f"[Rank {self._rank}] Loading checkpoint...", flush=True)
         self._load_checkpoint()
 
-        print(f"[Rank {self._rank}] Setup complete! Starting from step {self.step}", flush=True)
+        print(
+            f"[Rank {self._rank}] Setup complete! Starting from step {self.step}",
+            flush=True,
+        )
 
     def _load_checkpoint(self):
         """Load checkpoint and restore training state."""
         load_step = -1
-        if hasattr(self.job_config, "checkpoint") and hasattr(self.job_config.checkpoint, "load_step"):
+        if hasattr(self.job_config, "checkpoint") and hasattr(
+            self.job_config.checkpoint, "load_step"
+        ):
             load_step = self.job_config.checkpoint.load_step
 
         self.checkpointer.load(step=load_step)
@@ -130,7 +141,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         print(
             f"[Rank {self._rank}] Checkpoint loaded. "
             f"Restored step: {self.step}, ntokens_seen: {self.ntokens_seen}",
-            flush=True
+            flush=True,
         )
 
         if self.step > 0:
@@ -138,7 +149,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             print(
                 f"[Rank {self._rank}] Resuming training from step {self.step}. "
                 f"Current LR: {current_lr:.2e}",
-                flush=True
+                flush=True,
             )
 
     def batch_generator(
@@ -152,7 +163,10 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             try:
                 batch = next(data_iterator)
             except StopIteration:
-                print(f"[Rank {self._rank}] Dataloader exhausted, restarting...", flush=True)
+                print(
+                    f"[Rank {self._rank}] Dataloader exhausted, restarting...",
+                    flush=True,
+                )
                 data_iterator = iter(data_iterable)
                 batch = next(data_iterator)
 
@@ -162,9 +176,13 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             labels = batch.get("labels")
 
             if input_tensor is None:
-                raise ValueError(f"Batch must contain 'input' or 'tokens' key. Got keys: {batch.keys()}")
+                raise ValueError(
+                    f"Batch must contain 'input' or 'tokens' key. Got keys: {batch.keys()}"
+                )
             if labels is None:
-                raise ValueError(f"Batch must contain 'labels' key. Got keys: {batch.keys()}")
+                raise ValueError(
+                    f"Batch must contain 'labels' key. Got keys: {batch.keys()}"
+                )
 
             ntokens_batch = labels.numel()
             self.ntokens_seen += ntokens_batch
@@ -208,7 +226,9 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
 
         if parallel_dims.pp_enabled:
             with self.train_context():
-                targets, losses = (labels, []) if self.pp_has_last_stage else (None, None)
+                targets, losses = (
+                    (labels, []) if self.pp_has_last_stage else (None, None)
+                )
                 if self.pp_has_first_stage:
                     self.pp_schedule.step(
                         inputs,
@@ -258,7 +278,11 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             inputs, labels = next(data_iterator)
 
             batch_size = labels.shape[0]
-            seq_len = labels.shape[1] if len(labels.shape) > 1 else self.job_config.training.seq_len
+            seq_len = (
+                labels.shape[1]
+                if len(labels.shape) > 1
+                else self.job_config.training.seq_len
+            )
             self.metrics_tracker.record_batch(batch_size, seq_len)
 
             loss = self.forward_backward_step(inputs, labels)
@@ -297,7 +321,10 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
 
     @endpoint
     async def train(self) -> None:
-        print(f"[Rank {self._rank}] Starting training loop at step {self.step + 1}", flush=True)
+        print(
+            f"[Rank {self._rank}] Starting training loop at step {self.step + 1}",
+            flush=True,
+        )
 
         self.optimizers.zero_grad()
         self.metrics_tracker.start_training()
@@ -338,7 +365,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
                         f"Total Tokens: {self.ntokens_seen * self._size:,} | "
                         f"LR: {lr:.2e} | "
                         f"Step Time: {step_metrics['step_time_seconds']:.2f}s",
-                        flush=True
+                        flush=True,
                     )
 
             if self.validation_enabled and self.step % self.eval_every_n_steps == 0:
@@ -360,7 +387,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             f"Total tokens: {global_tokens:,} | "
             f"Total time: {total_time:.1f}s | "
             f"Avg tokens/s: {global_tokens / total_time:.0f}",
-            flush=True
+            flush=True,
         )
 
         if self.validation_enabled:
@@ -400,7 +427,10 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
 
             with maybe_no_grad:
                 for batch in batch_iter:
-                    if self.max_eval_steps is not None and num_steps >= self.max_eval_steps:
+                    if (
+                        self.max_eval_steps is not None
+                        and num_steps >= self.max_eval_steps
+                    ):
                         break
 
                     self._record_batch_metrics(batch.pop("metrics", []))
@@ -415,10 +445,16 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
                     labels = labels.to(self.device)
 
                     batch_size = labels.shape[0]
-                    seq_len = labels.shape[1] if len(labels.shape) > 1 else self.job_config.training.seq_len
+                    seq_len = (
+                        labels.shape[1]
+                        if len(labels.shape) > 1
+                        else self.job_config.training.seq_len
+                    )
                     total_tokens += batch_size * seq_len
 
-                    loss = self.forward_backward_step(input_tensor, labels, skip_backward=True)
+                    loss = self.forward_backward_step(
+                        input_tensor, labels, skip_backward=True
+                    )
                     total_loss += loss
                     num_steps += 1
 
@@ -443,7 +479,7 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
                 f"Tokens: {total_tokens:,} | "
                 f"Time: {eval_time:.1f}s | "
                 f"Tokens/s: {tokens_per_second:.0f}",
-                flush=True
+                flush=True,
             )
 
             if self.rank_should_record_loss:
@@ -490,8 +526,8 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         self.ntokens_seen = state_dict.get("ntokens_seen", 0)
         print(
             f"[Rank {self._rank}] Loaded train_state: step={self.step}, ntokens_seen={self.ntokens_seen}",
-            flush=True
+            flush=True,
         )
 
     def __repr__(self) -> str:
-        return "ForgeSFTRecipe"
+        return "TitanSFTTrainer"
