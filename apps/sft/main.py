@@ -2,12 +2,13 @@ import asyncio
 import logging
 import sys
 
-from apps.sft.recipe import ForgeSFTRecipe
+from omegaconf import DictConfig, OmegaConf
+
+from apps.sft.trainer import TitanSFTTrainer
 from forge.controller.provisioner import init_provisioner, shutdown
 from forge.observability import get_or_create_metric_logger
-from forge.types import ProvisionerConfig, LauncherConfig, ServiceConfig, ProcessConfig
+from forge.types import LauncherConfig, ProcessConfig, ProvisionerConfig, ServiceConfig
 from forge.util.config import parse
-from omegaconf import DictConfig, OmegaConf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,9 +43,7 @@ async def run(cfg: DictConfig) -> None:
             gpus_per_node=provisioner_dict.get("gpus_per_node", 8),
         )
 
-        await init_provisioner(
-            ProvisionerConfig(launcher_config=launcher_config)
-        )
+        await init_provisioner(ProvisionerConfig(launcher_config=launcher_config))
     else:
         await init_provisioner()
 
@@ -53,7 +52,7 @@ async def run(cfg: DictConfig) -> None:
     await mlogger.init_backends.call_one(metric_logging_cfg)
 
     actor_cfg = OmegaConf.to_container(cfg.actors.sft_trainer, resolve=True)
-    recipe = await ForgeSFTRecipe.options(**actor_cfg).as_actor(cfg)
+    recipe = await TitanSFTTrainer.options(**actor_cfg).as_actor(cfg)
 
     logger.info("Created recipe, running setup.")
     await recipe.setup.call()
