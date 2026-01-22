@@ -39,14 +39,14 @@ training:
   compile: false
   dtype: bfloat16
   gc_freq: 1
-  datasets:
+  dataset:
     - path: "/leonardo_scratch/fast/iGen_train/datasets/alpaca-cleaned"
       split: "train[:95%]"
 
 eval:
   eval_every_n_steps: 1000
   max_eval_steps: null
-  datasets:
+  dataset:
     - path: "/leonardo_scratch/fast/iGen_train/datasets/alpaca-cleaned"
       split: "train[95%:]"
 

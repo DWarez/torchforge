@@ -1,5 +1,6 @@
 import time
 from collections import deque
+from typing import Optional
 
 import torch
 from forge.observability import record_metric, Reduce
@@ -14,8 +15,8 @@ class TrainingMetrics:
     def reset(self):
         self.total_tokens_processed = 0
         self.total_samples_processed = 0
-        self.step_start_time = None
-        self.training_start_time = None
+        self.step_start_time = 0.0
+        self.training_start_time = 0.0
         self.step_tokens = 0
         self.step_samples = 0
         self.cumulative_loss = 0.0
@@ -31,7 +32,7 @@ class TrainingMetrics:
         self.step_tokens = 0
         self.step_samples = 0
 
-    def record_batch(self, batch_size: int, seq_len: int, num_valid_tokens: int = None):
+    def record_batch(self, batch_size: int, seq_len: int, num_valid_tokens: Optional[int] = None):
         if num_valid_tokens is None:
             num_valid_tokens = batch_size * seq_len
         self.step_tokens += num_valid_tokens

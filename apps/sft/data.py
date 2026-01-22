@@ -37,6 +37,7 @@ def setup_dataloader(
 
     dataset = sft_iterable_dataset(
         model_transform=tokenizer,
+        # Todo: change this to some sort of json dataset name -> mapping -> transform
         message_transform=AlpacaToMessages(),
         dp_mesh=dp_mesh,
         **dataset_config,
