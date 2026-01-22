@@ -11,7 +11,7 @@ from forge.controller import ForgeActor
 from forge.data.utils import StopAfterOneEpoch
 from forge.observability import get_or_create_metric_logger, record_metric, Reduce
 from monarch.actor import current_rank, current_size, endpoint
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.experiments.forge.engine import ForgeEngine
 from torchtitan.experiments.forge.job_config import ForgeJobConfig
@@ -19,6 +19,7 @@ from torchtitan.experiments.forge.job_config import ForgeJobConfig
 logger = logging.getLogger(__name__)
 
 try:
+    # this exists in torchtitan v0.2.1 but we're on v0.2.0
     from torchtitan.distributed.context_parallel import prepare_context_parallel_input
     HAS_CONTEXT_PARALLEL = True
 except ImportError:
@@ -37,17 +38,19 @@ def get_optional_mesh(parallel_dims, name: str):
     if name == "cp" and parallel_dims.cp_enabled:
         return parallel_dims.world_mesh["cp"]
     if name == "loss" and parallel_dims.dp_cp_enabled:
-        if hasattr(parallel_dims, "world_mesh") and "dp_cp" in parallel_dims.world_mesh.mesh_dim_names:
-            return parallel_dims.world_mesh["dp_cp"]
-        elif parallel_dims.dp_enabled:
-            return parallel_dims.world_mesh["dp"]
+        if hasattr(parallel_dims, "world_mesh"):
+            mesh_names = parallel_dims.world_mesh.mesh_dim_names
+            if "dp_cp" in mesh_names:
+                return parallel_dims.world_mesh["dp_cp"]
+            elif "dp" in mesh_names:
+                return parallel_dims.world_mesh["dp"]
     return None
 
 
 class ForgeSFTRecipe(ForgeActor, ForgeEngine):
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: DictConfig | ListConfig):
         job_config_dict = ForgeJobConfig().to_dict()
-        job_config = OmegaConf.merge(job_config_dict, config)
+        job_config: DictConfig | ListConfig = OmegaConf.merge(job_config_dict, config)
 
         self.step = 0
         self.ntokens_seen = 0
@@ -83,9 +86,9 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
         self.mlogger = await self._setup_metric_logger()
 
         print(f"[Rank {self._rank}] Setting training datasets...", flush=True)
-        train_datasets_config = self.job_config.training.datasets
+        train_dataset_config = self.job_config.training.dataset
         self.train_dataloader = setup_dataloader(
-            dataset_configs=train_datasets_config,
+            dataset_configs=train_dataset_config,
             hf_assets_path=self.job_config.model.hf_assets_path,
             batch_size=self.job_config.training.local_batch_size,
             parallel_dims=self.parallel_dims,
@@ -100,8 +103,8 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
 
         if self.validation_enabled:
             print(f"[Rank {self._rank}] Setting eval datasets...", flush=True)
-            self.eval_datasets_config = eval_config.get("datasets", [])
-            for i, dataset_config in enumerate(self.eval_datasets_config):
+            self.eval_dataset_config = eval_config.get("dataset", [])
+            for i, dataset_config in enumerate(self.eval_dataset_config):
                 ds_name = dataset_config.get("dataset_name", i)
                 dataloader = setup_dataloader(
                     dataset_configs=[dataset_config],
@@ -112,9 +115,31 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
                 self.val_dataloaders[ds_name] = dataloader
 
         print(f"[Rank {self._rank}] Loading checkpoint...", flush=True)
-        self.checkpointer.load()
+        self._load_checkpoint()
 
-        print(f"[Rank {self._rank}] Setup complete!", flush=True)
+        print(f"[Rank {self._rank}] Setup complete! Starting from step {self.step}", flush=True)
+
+    def _load_checkpoint(self):
+        """Load checkpoint and restore training state."""
+        load_step = -1
+        if hasattr(self.job_config, "checkpoint") and hasattr(self.job_config.checkpoint, "load_step"):
+            load_step = self.job_config.checkpoint.load_step
+
+        self.checkpointer.load(step=load_step)
+
+        print(
+            f"[Rank {self._rank}] Checkpoint loaded. "
+            f"Restored step: {self.step}, ntokens_seen: {self.ntokens_seen}",
+            flush=True
+        )
+
+        if self.step > 0:
+            current_lr = self.lr_schedulers.schedulers[0].get_last_lr()[0]
+            print(
+                f"[Rank {self._rank}] Resuming training from step {self.step}. "
+                f"Current LR: {current_lr:.2e}",
+                flush=True
+            )
 
     def batch_generator(
         self,
@@ -453,11 +478,20 @@ class ForgeSFTRecipe(ForgeActor, ForgeEngine):
             await self.mlogger.shutdown.call_one()
 
     def state_dict(self) -> dict[str, Any]:
-        return {"step": self.step, "ntokens_seen": self.ntokens_seen}
+        """Return training state for checkpointing."""
+        return {
+            "step": self.step,
+            "ntokens_seen": self.ntokens_seen,
+        }
 
     def load_state_dict(self, state_dict: dict[str, Any]):
-        self.step = state_dict["step"]
+        """Restore training state from checkpoint."""
+        self.step = state_dict.get("step", 0)
         self.ntokens_seen = state_dict.get("ntokens_seen", 0)
+        print(
+            f"[Rank {self._rank}] Loaded train_state: step={self.step}, ntokens_seen={self.ntokens_seen}",
+            flush=True
+        )
 
     def __repr__(self) -> str:
         return "ForgeSFTRecipe"
