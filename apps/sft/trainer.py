@@ -12,17 +12,15 @@ from torchtitan.experiments.forge.engine import ForgeEngine
 from torchtitan.experiments.forge.job_config import ForgeJobConfig
 
 from apps.sft.data import setup_dataloader
-from apps.sft.metrics import TrainingMetrics, log_eval_metrics, log_training_metrics
+from apps.sft.metrics import MetricsTracker
 from forge.controller import ForgeActor
 from forge.data.utils import StopAfterOneEpoch
-from forge.observability import Reduce, get_or_create_metric_logger, record_metric
+from forge.observability import get_or_create_metric_logger
 
 logger = logging.getLogger(__name__)
 
 try:
-    # this exists in torchtitan v0.2.1 but we're on v0.2.0
     from torchtitan.distributed.context_parallel import prepare_context_parallel_input
-
     HAS_CONTEXT_PARALLEL = True
 except ImportError:
     HAS_CONTEXT_PARALLEL = False
@@ -65,16 +63,28 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         self.eval_every_n_steps = None
         self.max_eval_steps = None
         self.mlogger = None
-        self.metrics_tracker = TrainingMetrics(self._rank, self._size)
 
         ForgeEngine.__init__(self, job_config)
 
+        log_freq = job_config.get("metrics", {}).get("log_freq", 10)
+        self.metrics = MetricsTracker(
+            rank=self._rank,
+            world_size=self._size,
+            num_flops_per_token=self.num_flops_per_token,
+            log_freq=log_freq,
+        )
+
+        self._register_train_state()
+
+    def _register_train_state(self):
+        """Register this trainer as the train_state in the checkpointer."""
+        if hasattr(self, "checkpointer") and self.checkpointer is not None:
+            if hasattr(self.checkpointer, "states"):
+                self.checkpointer.states["train_state"] = self
+                logger.info(f"[Rank {self._rank}] Registered train_state with checkpointer")
+
     async def _setup_metric_logger(self):
         return await get_or_create_metric_logger()
-
-    def _record_batch_metrics(self, data_metrics: list):
-        for metric in data_metrics:
-            record_metric(metric.key, metric.value, metric.reduction)
 
     @endpoint
     async def setup(self):
@@ -170,8 +180,6 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 data_iterator = iter(data_iterable)
                 batch = next(data_iterator)
 
-            self._record_batch_metrics(batch.pop("metrics", []))
-
             input_tensor = batch.get("input", batch.get("tokens"))
             labels = batch.get("labels")
 
@@ -186,10 +194,9 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
 
             ntokens_batch = labels.numel()
             self.ntokens_seen += ntokens_batch
-            self.metrics_tracker.ntokens_since_last_log += ntokens_batch
-            self.metrics_tracker.data_loading_times.append(
-                time.perf_counter() - data_load_start
-            )
+
+            data_load_time = time.perf_counter() - data_load_start
+            self.metrics.record_batch(ntokens_batch, data_load_time)
 
             input_tensor = input_tensor.to(self.device)
             labels = labels.to(self.device)
@@ -209,8 +216,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
             if not HAS_CONTEXT_PARALLEL:
                 raise RuntimeError(
                     "Context parallelism is enabled but torchtitan.distributed.context_parallel "
-                    "is not available in your installation. Please upgrade torchtitan or disable "
-                    "context parallelism in your config."
+                    "is not available in your installation."
                 )
             extra_kwargs: dict[str, Any] = {}
             inputs, labels, extra_kwargs = prepare_context_parallel_input(
@@ -269,22 +275,12 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
     def train_step(
         self,
         data_iterator: Iterable[tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[float, float]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self.optimizers.zero_grad()
-        lr = self.lr_schedulers.schedulers[0].get_last_lr()[0]
 
         accumulated_losses = []
         for _ in range(self.gradient_accumulation_steps):
             inputs, labels = next(data_iterator)
-
-            batch_size = labels.shape[0]
-            seq_len = (
-                labels.shape[1]
-                if len(labels.shape) > 1
-                else self.job_config.training.seq_len
-            )
-            self.metrics_tracker.record_batch(batch_size, seq_len)
-
             loss = self.forward_backward_step(inputs, labels)
             accumulated_losses.append(loss.detach())
 
@@ -303,18 +299,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         self.lr_schedulers.step()
 
         loss = torch.sum(torch.stack(accumulated_losses))
-
-        if self.parallel_dims.dp_cp_enabled:
-            loss = loss.detach()
-            loss_mesh = get_optional_mesh(self.parallel_dims, "loss")
-            if loss_mesh is not None:
-                global_avg_loss = dist_utils.dist_mean(loss, loss_mesh)
-            else:
-                global_avg_loss = loss.item()
-        else:
-            global_avg_loss = loss.detach().item()
-
-        return global_avg_loss, lr
+        return loss, grad_norm
 
     def should_continue_training(self) -> bool:
         return self.step < self.num_training_steps
@@ -327,46 +312,57 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         )
 
         self.optimizers.zero_grad()
-        self.metrics_tracker.start_training()
+        self.metrics.start_training()
 
         data_iterator = self.batch_generator(self.train_dataloader)
-        log_interval = self.job_config.get("metrics", {}).get("log_freq", 10)
 
         while self.should_continue_training():
             self.step += 1
             self.gc_handler.run(self.step)
-            self.metrics_tracker.start_step()
+            self.metrics.start_step()
 
-            loss_val, lr = self.train_step(data_iterator)
+            loss, grad_norm = self.train_step(data_iterator)
+
+            if self.parallel_dims.dp_cp_enabled:
+                loss = loss.detach()
+                loss_mesh = get_optional_mesh(self.parallel_dims, "loss")
+                if loss_mesh is not None:
+                    global_avg_loss = dist_utils.dist_mean(loss, loss_mesh)
+                else:
+                    global_avg_loss = loss.item()
+            else:
+                global_avg_loss = loss.detach().item()
 
             if self.rank_should_record_loss:
-                self.metrics_tracker.record_loss(
-                    loss_val if isinstance(loss_val, float) else loss_val.item()
-                )
+                self.metrics.record_loss(global_avg_loss)
 
-            step_metrics = self.metrics_tracker.end_step(self.step)
+            if self.metrics.should_log(self.step) and self.rank_should_record_loss:
+                grad_norm_val = grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm
+                lr = self.lr_schedulers.schedulers[0].get_last_lr()[0]
+                ntokens_global = self.ntokens_seen * self._size
 
-            if self.rank_should_record_loss:
-                log_training_metrics(
+                step_metrics = self.metrics.get_step_metrics(self.step)
+
+                self.metrics.log_to_forge(
                     step=self.step,
-                    loss=loss_val if isinstance(loss_val, float) else loss_val.item(),
-                    metrics=step_metrics,
-                    world_size=self._size,
+                    loss=global_avg_loss,
+                    grad_norm=grad_norm_val,
                     learning_rate=lr,
-                    ntokens_seen=self.ntokens_seen * self._size,
+                    ntokens_seen=ntokens_global,
+                    metrics=step_metrics,
                 )
 
-                if self.step % log_interval == 0 or self.step == 1:
-                    print(
-                        f"[Rank {self._rank}] Step {self.step}/{self.num_training_steps} | "
-                        f"Loss: {loss_val:.4f} | "
-                        f"Avg Loss: {step_metrics['running_avg_loss']:.4f} | "
-                        f"Tokens/s: {step_metrics['global_tokens_per_second']:.0f} | "
-                        f"Total Tokens: {self.ntokens_seen * self._size:,} | "
-                        f"LR: {lr:.2e} | "
-                        f"Step Time: {step_metrics['step_time_seconds']:.2f}s",
-                        flush=True,
-                    )
+                self.metrics.log_to_console(
+                    step=self.step,
+                    num_steps=self.num_training_steps,
+                    loss=global_avg_loss,
+                    grad_norm=grad_norm_val,
+                    learning_rate=lr,
+                    ntokens_seen=ntokens_global,
+                    metrics=step_metrics,
+                )
+
+                self.metrics.reset_logging_window()
 
             if self.validation_enabled and self.step % self.eval_every_n_steps == 0:
                 await self.evaluate()
@@ -379,16 +375,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
             if self._rank == 0:
                 await self.mlogger.flush.call_one(global_step=self.step)
 
-        total_time = time.time() - self.metrics_tracker.training_start_time
-        global_tokens = self.ntokens_seen * self._size
-        print(
-            f"[Rank {self._rank}] Training complete! "
-            f"Total steps: {self.step} | "
-            f"Total tokens: {global_tokens:,} | "
-            f"Total time: {total_time:.1f}s | "
-            f"Avg tokens/s: {global_tokens / total_time:.0f}",
-            flush=True,
-        )
+        self.metrics.log_training_complete(self.ntokens_seen)
 
         if self.validation_enabled:
             logger.info("Running final evaluation at end of training...")
@@ -409,8 +396,6 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
             else torch.no_grad()
         )
 
-        all_dataset_results = []
-
         for dataset_name, val_dataloader in self.val_dataloaders.items():
             print(f"[Rank {self._rank}] Evaluating dataset: {dataset_name}", flush=True)
 
@@ -418,22 +403,19 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
             total_tokens = 0
             num_steps = 0
 
+            eval_start_time = time.perf_counter()
+
             batch_iter = StopAfterOneEpoch(
                 iter=iter(val_dataloader),
                 device=self.device,
-                dp_mesh=dp_mesh,
+                # this dp_mesh is actually ProcessingGroup
+                dp_mesh=dp_mesh.get_group() if dp_mesh else None,
             )
-            eval_start_time = time.time()
 
             with maybe_no_grad:
                 for batch in batch_iter:
-                    if (
-                        self.max_eval_steps is not None
-                        and num_steps >= self.max_eval_steps
-                    ):
+                    if self.max_eval_steps is not None and num_steps >= self.max_eval_steps:
                         break
-
-                    self._record_batch_metrics(batch.pop("metrics", []))
 
                     labels = batch.get("labels")
                     input_tensor = batch.get("input", batch.get("tokens"))
@@ -444,13 +426,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                     input_tensor = input_tensor.to(self.device)
                     labels = labels.to(self.device)
 
-                    batch_size = labels.shape[0]
-                    seq_len = (
-                        labels.shape[1]
-                        if len(labels.shape) > 1
-                        else self.job_config.training.seq_len
-                    )
-                    total_tokens += batch_size * seq_len
+                    total_tokens += labels.numel()
 
                     loss = self.forward_backward_step(
                         input_tensor, labels, skip_backward=True
@@ -458,53 +434,33 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                     total_loss += loss
                     num_steps += 1
 
-            eval_time = time.time() - eval_start_time
+            eval_time = time.perf_counter() - eval_start_time
             avg_loss = (total_loss / max(num_steps, 1)).item()
-            tokens_per_second = total_tokens / eval_time if eval_time > 0 else 0
-
-            result = {
-                "dataset_name": dataset_name,
-                "avg_loss": avg_loss,
-                "num_steps": num_steps,
-                "total_tokens": total_tokens,
-                "eval_time": eval_time,
-                "tokens_per_second": tokens_per_second,
-            }
-            all_dataset_results.append(result)
-
-            print(
-                f"[Rank {self._rank}] Eval {dataset_name} complete | "
-                f"Steps: {num_steps} | "
-                f"Avg Loss: {avg_loss:.4f} | "
-                f"Tokens: {total_tokens:,} | "
-                f"Time: {eval_time:.1f}s | "
-                f"Tokens/s: {tokens_per_second:.0f}",
-                flush=True,
-            )
+            tps = total_tokens / eval_time if eval_time > 0 else 0
 
             if self.rank_should_record_loss:
-                log_eval_metrics(
+                self.metrics.log_eval_to_forge(
                     dataset_name=dataset_name,
-                    avg_loss=avg_loss,
-                    num_steps=num_steps,
-                    total_tokens=total_tokens * self._size,
-                    tokens_per_second=tokens_per_second * self._size,
+                    loss=avg_loss,
+                    ntokens=total_tokens,
                     eval_time=eval_time,
                 )
 
-        if self.rank_should_record_loss and len(all_dataset_results) > 1:
-            losses = [r["avg_loss"] for r in all_dataset_results]
-            steps = [r["num_steps"] for r in all_dataset_results]
-
-            macro_avg_loss = sum(losses) / len(losses)
-            record_metric("eval/macro_avg_loss", macro_avg_loss, Reduce.MEAN)
-
-            total_steps = sum(steps)
-            micro_avg_loss = sum(l * s for l, s in zip(losses, steps)) / total_steps
-            record_metric("eval/micro_avg_loss", micro_avg_loss, Reduce.MEAN)
+            print(
+                f"[Rank {self._rank}] Eval {dataset_name} | "
+                f"Loss: {avg_loss:.4f} | "
+                f"PPL: {torch.exp(torch.tensor(avg_loss)).item():.2f} | "
+                f"TPS: {tps * self._size:,.0f} | "
+                f"Steps: {num_steps} | "
+                f"Time: {eval_time:.1f}s",
+                flush=True,
+            )
 
         for model_part in self.model_parts:
             model_part.train()
+
+        if self._rank == 0:
+            await self.mlogger.flush.call_one(global_step=self.step)
 
     @endpoint
     async def cleanup(self) -> None:
@@ -514,14 +470,12 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
             await self.mlogger.shutdown.call_one()
 
     def state_dict(self) -> dict[str, Any]:
-        """Return training state for checkpointing."""
         return {
             "step": self.step,
             "ntokens_seen": self.ntokens_seen,
         }
 
     def load_state_dict(self, state_dict: dict[str, Any]):
-        """Restore training state from checkpoint."""
         self.step = state_dict.get("step", 0)
         self.ntokens_seen = state_dict.get("ntokens_seen", 0)
         print(
