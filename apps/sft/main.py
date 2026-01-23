@@ -573,18 +573,18 @@ async def run(cfg: DictConfig) -> None:
     await mlogger.init_backends.call_one(metric_logging_cfg)
 
     actor_cfg = OmegaConf.to_container(cfg.actors.sft_trainer, resolve=True)
-    recipe = await TitanSFTTrainer.options(**actor_cfg).as_actor(cfg)
+    trainer = await TitanSFTTrainer.options(**actor_cfg).as_actor(cfg)
 
     logger.info("Created recipe, running setup.")
-    await recipe.setup.call()
+    await trainer.setup.call()
 
     logger.info("Recipe has been setup. Training now.")
-    await recipe.train.call()
+    await trainer.train.call()
 
     logger.info("Done training. Clean up")
-    await recipe.cleanup.call()
+    await trainer.cleanup.call()
 
-    await recipe.mesh.stop()
+    await trainer.mesh.stop()
     await shutdown()
     logger.info("All done!")
 

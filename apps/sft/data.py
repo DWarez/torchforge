@@ -22,18 +22,31 @@ def setup_dataloader(
 
     tokenizer = HuggingFaceModelTokenizer(
         tokenizer_json_path=os.path.join(hf_assets_path, "tokenizer.json"),
-        tokenizer_config_json_path=os.path.join(hf_assets_path, "tokenizer_config.json"),
+        tokenizer_config_json_path=os.path.join(
+            hf_assets_path, "tokenizer_config.json"
+        ),
         generation_config_path=os.path.join(hf_assets_path, "generation_config.json"),
         chat_template_path=(
             path
-            if os.path.exists(path := os.path.join(hf_assets_path, "chat_template.jinja"))
+            if os.path.exists(
+                path := os.path.join(hf_assets_path, "chat_template.jinja")
+            )
             else None
         ),
     )
 
     dp_mesh = None
-    if parallel_dims is not None and parallel_dims.dp_enabled:
-        dp_mesh = parallel_dims.world_mesh.get_group("dp")
+    if parallel_dims is not None:
+        if parallel_dims.dp_enabled:
+            dp_mesh = parallel_dims.world_mesh.get_group("dp")
+        elif parallel_dims.dp_replicate_enabled:
+            dp_mesh = parallel_dims.world_mesh.get_group("dp_replicate")
+        elif parallel_dims.dp_shard_enabled:
+            dp_mesh = parallel_dims.world_mesh.get_group("dp_shard")
+        else:
+            import torch.distributed as dist
+
+            dp_mesh = dist.new_group([dist.get_rank()])
 
     dataset = sft_iterable_dataset(
         model_transform=tokenizer,
