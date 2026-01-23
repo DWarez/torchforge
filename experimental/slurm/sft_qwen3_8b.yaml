@@ -19,6 +19,7 @@ provisioner:
     account: AIFAC_L07_016
     qos: qos_llm_min
     partition: boost_usr_prod
+    nodes: 2
   mem: 0
   cpus_per_task: 32
   gpus_per_node: 4
@@ -51,7 +52,7 @@ eval:
       split: "train[95%:]"
 
 parallelism:
-  data_parallel_replicate_degree: 1
+  data_parallel_replicate_degree: 2
   data_parallel_shard_degree: 4
   tensor_parallel_degree: 1
   pipeline_parallel_degree: 1
@@ -87,6 +88,6 @@ services: {}
 actors:
   sft_trainer:
     procs: 4
-    hosts: 1
+    hosts: 2
     with_gpus: true
     mesh_name: sft_trainer

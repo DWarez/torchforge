@@ -1,14 +1,4 @@
 #!/bin/bash
-
-#SBATCH --qos=qos_llm_min
-#SBATCH --account=AIFAC_L07_016
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=4
-#SBATCH --time=01:00:00
-#SBATCH --exclude="lrdn[1831-3456]"
-
 echo "Starting SFT training job"
 
 eval "$(conda shell.bash hook)"
