@@ -16,7 +16,7 @@ CONFIG_NAME="${2}"
 RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/$SLURM_JOB_NAME"
 
 export NUM_NODES=1
-export GPUS_PER_NODE=4
+export GPUS_PER_NODE=0
 export CPUS_PER_NODE=4
 
 export HF_CACHE_DIR="/leonardo_scratch/fast/iGen_train/$USER/hf_cache"

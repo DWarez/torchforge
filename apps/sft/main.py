@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def run(cfg: DictConfig) -> None:
     logger.info("Spawning recipe...")
 
-    if cfg.get("provisioner", None) is not None:
+    if cfg.get("provisioner", None):
         provisioner_dict = OmegaConf.to_container(cfg.provisioner, resolve=True)
 
         services_dict = {}
