@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from torchtitan.distributed.context_parallel import prepare_context_parallel_input
+
     HAS_CONTEXT_PARALLEL = True
 except ImportError:
     HAS_CONTEXT_PARALLEL = False
@@ -52,6 +53,8 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         job_config_dict = ForgeJobConfig().to_dict()
         job_config: DictConfig | ListConfig = OmegaConf.merge(job_config_dict, config)
 
+        ForgeEngine.__init__(self, job_config)
+
         self.step = 0
         self.ntokens_seen = 0
         self.num_training_steps = job_config.training.steps
@@ -63,8 +66,6 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         self.eval_every_n_steps = None
         self.max_eval_steps = None
         self.mlogger = None
-
-        ForgeEngine.__init__(self, job_config)
 
         log_freq = job_config.get("metrics", {}).get("log_freq", 10)
         self.metrics = MetricsTracker(
@@ -81,7 +82,9 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         if hasattr(self, "checkpointer") and self.checkpointer is not None:
             if hasattr(self.checkpointer, "states"):
                 self.checkpointer.states["train_state"] = self
-                logger.info(f"[Rank {self._rank}] Registered train_state with checkpointer")
+                logger.info(
+                    f"[Rank {self._rank}] Registered train_state with checkpointer"
+                )
 
     async def _setup_metric_logger(self):
         return await get_or_create_metric_logger()
@@ -191,6 +194,17 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 raise ValueError(
                     f"Batch must contain 'labels' key. Got keys: {batch.keys()}"
                 )
+
+            # padding to make samples seq len divisible by tp dimension
+            tp_degree = self._size if self.parallel_dims.tp_enabled else 1
+            seq_len = input_tensor.shape[1]
+            if seq_len % tp_degree != 0:
+                pad_to = ((seq_len // tp_degree) + 1) * tp_degree
+                pad_size = pad_to - seq_len
+                input_tensor = torch.nn.functional.pad(
+                    input_tensor, (0, pad_size), value=0
+                )
+                labels = torch.nn.functional.pad(labels, (0, pad_size), value=-100)
 
             ntokens_batch = labels.numel()
             self.ntokens_seen += ntokens_batch
@@ -337,7 +351,9 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 self.metrics.record_loss(global_avg_loss)
 
             if self.metrics.should_log(self.step) and self.rank_should_record_loss:
-                grad_norm_val = grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm
+                grad_norm_val = (
+                    grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm
+                )
                 lr = self.lr_schedulers.schedulers[0].get_last_lr()[0]
                 ntokens_global = self.ntokens_seen * self._size
 
@@ -414,7 +430,10 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
 
             with maybe_no_grad:
                 for batch in batch_iter:
-                    if self.max_eval_steps is not None and num_steps >= self.max_eval_steps:
+                    if (
+                        self.max_eval_steps is not None
+                        and num_steps >= self.max_eval_steps
+                    ):
                         break
 
                     labels = batch.get("labels")
