@@ -87,7 +87,9 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 )
 
     async def _setup_metric_logger(self):
-        return await get_or_create_metric_logger()
+      if self._rank != 0:
+        return None
+      return await get_or_create_metric_logger()
 
     @endpoint
     async def setup(self):
@@ -388,7 +390,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 last_step=self.step == self.num_training_steps,
             )
 
-            if self._rank == 0:
+            if self.mlogger and self._rank == 0:
                 await self.mlogger.flush.call_one(global_step=self.step)
 
         self.metrics.log_training_complete(self.ntokens_seen)
@@ -478,7 +480,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         for model_part in self.model_parts:
             model_part.train()
 
-        if self._rank == 0:
+        if self.mlogger and self._rank == 0:
             await self.mlogger.flush.call_one(global_step=self.step)
 
     @endpoint
