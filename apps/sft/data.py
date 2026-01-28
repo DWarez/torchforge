@@ -100,6 +100,7 @@ class GenericSFTToMessages:
 
 def setup_dataloader(
     dataset_configs: list[dict],
+    max_seq_len: int,
     hf_assets_path: str,
     batch_size: int,
     parallel_dims: ParallelDims | None = None,
@@ -125,6 +126,7 @@ def setup_dataloader(
             )
             else None
         ),
+        max_seq_len=max_seq_len,
     )
 
     dp_mesh = None

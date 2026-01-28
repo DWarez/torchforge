@@ -95,7 +95,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
     async def setup(self):
         print(f"[Rank {self._rank}] Starting setup...", flush=True)
 
-        self.rank_should_record_loss = True
+        self.rank_should_record_loss = self._rank == 0
         if self.parallel_dims.pp_enabled and not self.pp_has_last_stage:
             self.rank_should_record_loss = False
 
@@ -106,6 +106,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         train_dataset_config = self.job_config.training.dataset
         self.train_dataloader = setup_dataloader(
             dataset_configs=train_dataset_config,
+            max_seq_len=self.job_config.training.seq_len,
             hf_assets_path=self.job_config.model.hf_assets_path,
             batch_size=self.job_config.training.local_batch_size,
             parallel_dims=self.parallel_dims,
@@ -129,6 +130,7 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
                 ds_name = dataset_config.get("dataset_name", i)
                 dataloader = setup_dataloader(
                     dataset_configs=[dataset_config],
+                    max_seq_len=self.job_config.training.seq_len,
                     hf_assets_path=self.job_config.model.hf_assets_path,
                     batch_size=self.job_config.training.local_batch_size,
                     parallel_dims=self.parallel_dims,
