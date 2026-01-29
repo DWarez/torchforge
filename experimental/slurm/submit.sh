@@ -14,7 +14,7 @@ fi
 
 CONFIG_NAME="${2}"
 LOG_NAME="${3}"
-RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/$LOG_NAME"
+RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/qwen3_8b/$LOG_NAME"
 
 export NUM_NODES=1
 export GPUS_PER_NODE=0
@@ -27,6 +27,7 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 
+# export NCCL_DEBUG=INFO
 export NCCL_TIMEOUT=600
 export NCCL_DEBUG_SUBSYS=ALL
 export TORCH_NCCL_BLOCKING_WAIT=1
@@ -38,11 +39,13 @@ export MASTER_PORT=9251
 CONDA_PATH="/leonardo/home/userexternal/$USER/miniconda3"
 FORGE_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge"
 
-export TORCH_COMPILE_DISABLE=1
+# export TORCH_COMPILE_DISABLE=1
 unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 export TORCHSTORE_RDMA_ENABLED=0
 
 export MONARCH_LOG_LEVEL=DEBUG
+export TORCH_LOGS="+dynamo,graph_breaks,recompiles"
+export TORCHDYNAMO_VERBOSE=1
 export TMPDIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 export XDG_RUNTIME_DIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 export TEMPDIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
