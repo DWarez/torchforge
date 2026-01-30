@@ -44,7 +44,7 @@ unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 export TORCHSTORE_RDMA_ENABLED=0
 
 export MONARCH_LOG_LEVEL=DEBUG
-export TORCH_LOGS="+dynamo,graph_breaks,recompiles"
+export TORCH_LOGS="+graph_breaks,recompiles"
 export TORCHDYNAMO_VERBOSE=1
 export TMPDIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 export XDG_RUNTIME_DIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
@@ -67,9 +67,3 @@ sbatch --verbose --job-name="${CONFIG_NAME}_controller" \
        --error="$RES_DIR/%x_%j.err" \
        --output="$RES_DIR/%x_%j.out" \
        experimental/slurm/submit_${SCRIPT_TYPE}.sh
-
-
-# Usage:
-# ./experimental/slurm/submit.sh qwen3_8b
-# ./experimental/slurm/submit.sh qwen3_32b
-# ./experimental/slurm/submit.sh qwen3_30b_a3b

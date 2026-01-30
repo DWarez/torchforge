@@ -79,7 +79,6 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         self._loss_mesh = None
         self._dp_mesh = None
         self._tp_degree = 1
-        self._accumulated_loss = None
 
         self._register_train_state()
 
@@ -113,12 +112,12 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         self._loss_mesh = get_optional_mesh(self.parallel_dims, "loss")
         self._dp_mesh = get_optional_mesh(self.parallel_dims, "dp")
         self._tp_degree = self._size if self.parallel_dims.tp_enabled else 1
-        self._accumulated_loss = torch.tensor(0.0, device=self.device)
 
     @endpoint
     async def setup(self):
         print(f"[Rank {self._rank}] Starting setup...", flush=True)
 
+        self._accumulated_loss = torch.tensor(0.0, device=self.device)
         self.rank_should_record_loss = self._rank == 0
         if self.parallel_dims.pp_enabled and not self.pp_has_last_stage:
             self.rank_should_record_loss = False
@@ -310,31 +309,31 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
     def train_step(
         self,
         data_iterator: Iterable[tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[torch.Tensor, float]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self.optimizers.zero_grad()
-
         self._accumulated_loss.zero_()
+
         for _ in range(self.gradient_accumulation_steps):
             inputs, labels = next(data_iterator)
             loss = self.forward_backward_step(inputs, labels)
             self._accumulated_loss += loss.detach()
 
+        pp_mesh = get_optional_mesh(self.parallel_dims, "pp")
         grad_norm = dist_utils.clip_grad_norm_(
             [p for m in self.model_parts for p in m.parameters()],
             self.job_config.training.max_norm,
             foreach=True,
-            pp_mesh=self._pp_mesh,
+            pp_mesh=pp_mesh,
             ep_enabled=self.parallel_dims.ep_enabled,
         )
 
-        if self._has_checkpointer_wait:
+        if hasattr(self.checkpointer, "maybe_wait_for_staging"):
             self.checkpointer.maybe_wait_for_staging()
 
         self.optimizers.step()
         self.lr_schedulers.step()
 
-        grad_norm_val = grad_norm.item() if torch.is_tensor(grad_norm) else grad_norm
-        return self._accumulated_loss, grad_norm_val
+        return self._accumulated_loss, grad_norm
 
     def should_continue_training(self) -> bool:
         return self.step < self.num_training_steps
@@ -356,7 +355,6 @@ class TitanSFTTrainer(ForgeActor, ForgeEngine):
         loss_mesh = self._loss_mesh
         num_training_steps = self.num_training_steps
         world_size = self._size
-        mlogger = self.mlogger
         is_rank_zero = self._rank == 0
 
         while self.should_continue_training():

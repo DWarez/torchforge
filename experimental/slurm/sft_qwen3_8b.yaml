@@ -19,11 +19,11 @@ provisioner:
     account: AIFAC_L07_016
     qos: qos_llm_min
     partition: boost_usr_prod
-    nodes: 8
-    export: "ALL,PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128"
-    exclude: lrdn[1831-3456]
-    error: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/compile/%x_%j.err"
-    output: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/compile/%x_%j.out"
+    nodes: 2
+    export: "ALL,PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,TORCH_COMPILE_DEBUG=0,TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache,TORCHINDUCTOR_FX_GRAPH_CACHE=0"
+    exclude: lrdn[2671-3456]
+    error: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/avoid_ooms/%x_%j.err"
+    output: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/avoid_ooms/%x_%j.out"
   mem: 0
   cpus_per_task: 32
   gpus_per_node: 4
@@ -42,8 +42,7 @@ compile:
   backend: "inductor"
 
 training:
-  local_batch_size: 2
-  gradient_accumulation_steps: 4
+  local_batch_size: 1
   seq_len: 4096
   max_norm: 1.0
   steps: 1000  
@@ -61,27 +60,28 @@ eval:
       split: "train_sft[95%:]"
 
 parallelism:
-  data_parallel_replicate_degree: 8
+  data_parallel_replicate_degree: 2
   data_parallel_shard_degree: 4
   tensor_parallel_degree: 1
   pipeline_parallel_degree: 1
   context_parallel_degree: 1
   expert_parallel_degree: 1
+  enable_compiled_autograd: true
   disable_loss_parallel: false
 
 checkpoint:
-  enable: false
+  enable: true
   folder: ./checkpoint
   initial_load_path: hf://${model_name}
   initial_load_in_hf: true
   last_save_in_hf: false
   last_save_model_only: false
   interval: 50
-  async_mode: "async"
+  async_mode: "disabled"
 
 activation_checkpoint:
   mode: selective
-  selective_ac_option: "2"
+  selective_ac_option: "1"
 
 metric_logging:
   wandb:
@@ -97,6 +97,6 @@ services: {}
 actors:
   sft_trainer:
     procs: 4
-    hosts: 8
+    hosts: 2
     with_gpus: true
     mesh_name: sft_trainer
