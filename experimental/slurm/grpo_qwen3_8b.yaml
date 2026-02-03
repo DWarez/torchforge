@@ -31,7 +31,7 @@ metric_logging:
     logging_mode: global_reduce
 
 dataset:
-  path: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/gsm8k"
+  path: "/leonardo_scratch/fast/iGen_train/datasets/gsm8k"
   revision: "main"
   data_split: "train"
   streaming: true
@@ -70,9 +70,9 @@ trainer:
   compile:
     enable: ${compile}
   parallelism:
-    data_parallel_replicate_degree: 1
-    data_parallel_shard_degree: 1
-    tensor_parallel_degree: 4
+    data_parallel_replicate_degree: 4
+    data_parallel_shard_degree: 4
+    tensor_parallel_degree: 1
     pipeline_parallel_degree: 1
     context_parallel_degree: 1
     expert_parallel_degree: 1
@@ -146,7 +146,7 @@ actors:
     mesh_name: dataset
   trainer:
     procs: 4
-    hosts: 1
+    hosts: 4
     with_gpus: true
     mesh_name: trainer
   replay_buffer:

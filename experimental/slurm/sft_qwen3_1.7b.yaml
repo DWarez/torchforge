@@ -1,29 +1,28 @@
-# SFT Training with Qwen3-8B
-# python -m apps.sft.main --config apps/sft/qwen3_8b.yaml
+# DDP 16, no FSDP, lbs=4, selective recomputation -> ~55216MiB / 65536MiB VRAM in use
 
 comm:
   trace_buf_size: 0
   init_timeout_seconds: 1800
 
-model_name: "Qwen/Qwen3-8B"
+model_name: "Qwen/Qwen3-1.7B"
 
 model:
   name: qwen3
-  flavor: 8B
+  flavor: 1.7B
   hf_assets_path: hf://${model_name}
 
 provisioner:
   launcher: slurm
-  job_name: sft_qwen3_8b
+  job_name: sft_qwen3_1.7b
   slurm_args:
     account: AIFAC_L07_016
     qos: qos_llm_min
     partition: boost_usr_prod
-    nodes: 2
-    export: "ALL,PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,TORCH_COMPILE_DEBUG=0,TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor_cache,TORCHINDUCTOR_FX_GRAPH_CACHE=0"
-    exclude: lrdn[2671-3456]
-    error: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/avoid_ooms/%x_%j.err"
-    output: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/qwen3_8b/avoid_ooms/%x_%j.out"
+    nodes: 4
+    export: ALL,PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    exclude: lrdn[1831-3456]
+    error: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/dp16/%x_%j.err"
+    output: "/leonardo_scratch/fast/iGen_train/dsalvati/forge/logs/dp16/%x_%j.out"
   mem: 0
   cpus_per_task: 32
   gpus_per_node: 4
@@ -36,18 +35,14 @@ optimizer:
 lr_scheduler:
   warmup_steps: 200
 
-compile:
-  enable: true
-  components: ["model", "loss"]
-  backend: "inductor"
-
 training:
-  local_batch_size: 1
+  local_batch_size: 4
   seq_len: 4096
   max_norm: 1.0
-  steps: 1000  
+  steps: 1000
+  compile: false
   dtype: bfloat16
-  gc_freq: 10
+  gc_freq: 1
   dataset:
     - path: "/leonardo_scratch/fast/iGen_train/datasets/ultrachat_200k"
       split: "train_sft[:95%]"
@@ -60,13 +55,12 @@ eval:
       split: "train_sft[95%:]"
 
 parallelism:
-  data_parallel_replicate_degree: 2
-  data_parallel_shard_degree: 4
+  data_parallel_replicate_degree: 16
+  data_parallel_shard_degree: 1
   tensor_parallel_degree: 1
   pipeline_parallel_degree: 1
   context_parallel_degree: 1
   expert_parallel_degree: 1
-  enable_compiled_autograd: true
   disable_loss_parallel: false
 
 checkpoint:
@@ -81,7 +75,7 @@ checkpoint:
 
 activation_checkpoint:
   mode: selective
-  selective_ac_option: "1"
+  selective_ac_option: op
 
 metric_logging:
   wandb:
@@ -97,6 +91,6 @@ services: {}
 actors:
   sft_trainer:
     procs: 4
-    hosts: 2
+    hosts: 4
     with_gpus: true
     mesh_name: sft_trainer

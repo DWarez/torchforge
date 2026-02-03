@@ -13,7 +13,8 @@ if [[ "${SCRIPT_TYPE}" != "sft" && "${SCRIPT_TYPE}" != "grpo" ]]; then
 fi
 
 CONFIG_NAME="${2}"
-RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/$SLURM_JOB_NAME"
+LOG_NAME="${3}"
+RES_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge/logs/qwen3_8b/$LOG_NAME"
 
 export NUM_NODES=1
 export GPUS_PER_NODE=0
@@ -26,7 +27,7 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 
-# export NCCL_DEBUG=INFO 
+# export NCCL_DEBUG=INFO
 export NCCL_TIMEOUT=600
 export NCCL_DEBUG_SUBSYS=ALL
 export TORCH_NCCL_BLOCKING_WAIT=1
@@ -38,23 +39,27 @@ export MASTER_PORT=9251
 CONDA_PATH="/leonardo/home/userexternal/$USER/miniconda3"
 FORGE_DIR="/leonardo_scratch/fast/iGen_train/$USER/forge"
 
-export TORCH_COMPILE_DISABLE=1
+# export TORCH_COMPILE_DISABLE=1
 unset SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU SLURM_MEM_PER_NODE
 export TORCHSTORE_RDMA_ENABLED=0
 
 export MONARCH_LOG_LEVEL=DEBUG
+export TORCH_LOGS="+graph_breaks,recompiles"
+export TORCHDYNAMO_VERBOSE=1
 export TMPDIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 export XDG_RUNTIME_DIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 export TEMPDIR="/leonardo_scratch/fast/iGen_train/$USER/tmp"
 mkdir -p "$TMPDIR"
 
+mkdir -p "$RES_DIR"
+cp "experimental/slurm/${CONFIG_NAME}.yaml" "$RES_DIR/"
 
 sbatch --verbose --job-name="${CONFIG_NAME}_controller" \
        --export=ALL,CONFIG_NAME="${CONFIG_NAME}" \
        --account=AIFAC_L07_016 \
        --qos=qos_llm_min \
        --partition=boost_usr_prod \
-       --time=00:30:00 \
+       --time=01:00:00 \
        --nodes=${NUM_NODES} \
        --gres=gpu:${GPUS_PER_NODE} \
        --cpus-per-task=${CPUS_PER_NODE} \
@@ -62,9 +67,3 @@ sbatch --verbose --job-name="${CONFIG_NAME}_controller" \
        --error="$RES_DIR/%x_%j.err" \
        --output="$RES_DIR/%x_%j.out" \
        experimental/slurm/submit_${SCRIPT_TYPE}.sh
-
-
-# Usage:
-# ./experimental/slurm/submit.sh qwen3_8b
-# ./experimental/slurm/submit.sh qwen3_32b
-# ./experimental/slurm/submit.sh qwen3_30b_a3b

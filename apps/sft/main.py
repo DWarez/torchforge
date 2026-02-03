@@ -10,6 +10,17 @@ from forge.observability import get_or_create_metric_logger
 from forge.types import LauncherConfig, ProcessConfig, ProvisionerConfig, ServiceConfig
 from forge.util.config import parse
 
+### MONKEY PATCH TO ADD CONFIGURATBLE TIMEOUT TO MONARCH ###
+# due to the fact that torchforge uses an older version of Monarch #
+import monarch._src.job.slurm as slurm_module
+
+_original_wait = slurm_module.SlurmJob._wait_for_job_start
+
+def _patched_wait(self, job_id, expected_nodes, timeout=1800):
+    return _original_wait(self, job_id, expected_nodes, timeout)
+
+slurm_module.SlurmJob._wait_for_job_start = _patched_wait
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
